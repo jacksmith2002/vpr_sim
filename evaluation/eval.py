@@ -3,6 +3,7 @@ import numpy as np
 import hnswlib
 import matplotlib.pyplot as plt
 import base64
+from evaluation import utils
 
 # Load the precomputed feature data
 with open("place_desc/data/random.json", "r") as f:
@@ -11,16 +12,9 @@ with open("place_desc/data/random.json", "r") as f:
 with open("place_desc/data/mapped.json", "r") as f:
     mapped_data = json.load(f)
 
-def load_feature_vectors(data):
-    """Loads and decodes feature vectors from JSON."""
-    for img_id, entry in data.items():
-        for model, encoded_vector in entry["feature_vectors"].items():
-            byte_data = base64.b64decode(encoded_vector)
-            data[img_id]["feature_vectors"][model] = np.frombuffer(byte_data, dtype=np.float32)
-
 # Decode feature vectors
-load_feature_vectors(random_data)
-load_feature_vectors(mapped_data)
+utils.load_feature_vectors(random_data)
+utils.load_feature_vectors(mapped_data)
 
 # User-specified number of environments to test
 test_envs = 1  # Change this value for different test sizes
