@@ -1,80 +1,66 @@
-import json
+import os
 import numpy as np
 import hnswlib
 import matplotlib.pyplot as plt
-import base64
+import pandas as pd
 from evaluation import utils
 
-# Load the precomputed feature data
-with open("place_desc/data/random.json", "r") as f:
-    random_data = json.load(f)
+# Paths to data
+mapped_imgs_dir = "data/mapped_imgs"
+random_imgs_dir = "random_imgs"
+mapped_meta_path = "mapped_meta.csv"
+random_meta_path = "random_meta.csv"
 
-with open("place_desc/data/mapped.json", "r") as f:
-    mapped_data = json.load(f)
-
-# Decode feature vectors
-utils.load_feature_vectors(random_data)
-utils.load_feature_vectors(mapped_data)
+# Load metadata
+mapped_meta = pd.read_csv(mapped_meta_path)
+random_meta = pd.read_csv(random_meta_path)
 
 # User-specified number of environments to test
-test_envs = 1  # Change this value for different test sizes
-all_envs = list(set(entry["environment_id"] for entry in random_data.values()))
+test_envs = 1  # Adjust as needed
+all_envs = list(set(random_meta["env_id"]))
 selected_envs = all_envs[:test_envs]
 
 # Filter data based on selected environments
-filtered_random_data = {k: v for k, v in random_data.items() if v["environment_id"] in selected_envs}
-filtered_mapped_data = {k: v for k, v in mapped_data.items() if v["environment_id"] in selected_envs}
+filtered_mapped_meta = mapped_meta[mapped_meta["env_id"].isin(selected_envs)]
+filtered_random_meta = random_meta[random_meta["env_id"].isin(selected_envs)]
 
-# Initialize HNSW indices for each place description model
+# Initialize models
 models = ["netvlad", "alexnet", "mobilenet", "cohog"]
-hnsw_indices = {}
-image_ids = list(filtered_mapped_data.keys())
 
-dim = len(next(iter(filtered_mapped_data.values()))["feature_vectors"]["netvlad"])
+# Generate feature vectors for mapped and random images
+mapped_features = utils.create_feature_vectors(mapped_imgs_dir, filtered_mapped_meta, models)
+random_features = utils.create_feature_vectors(random_imgs_dir, filtered_random_meta, models)
+
+# Initialize and populate HNSW indices
+hnsw_indices = utils.create_hnsw(mapped_features, models)
+
+# Evaluate recall@n for k1 to k25
+results = {model: {f"k{i}": 0 for i in range(1, 26)} for model in models}
+total_queries = len(random_features)
 
 for model in models:
-    hnsw_indices[model] = hnswlib.Index(space='cosine', dim=dim)
-    hnsw_indices[model].init_index(max_elements=len(filtered_mapped_data), ef_construction=200, M=16)
-    to_insert = np.array([filtered_mapped_data[img_id]["feature_vectors"][model] for img_id in image_ids])
-    hnsw_indices[model].add_items(to_insert)
-    hnsw_indices[model].set_ef(50)
+    for img_id, query_vector in random_features[model].items():
+        indices, _ = hnsw_indices[model].knn_query(query_vector, k=25)
+        retrieved_images = [list(mapped_features[model].keys())[i] for i in indices[0]]
+        correct_matches = set(filtered_random_meta[filtered_random_meta["image_id"] == img_id]["correct_image_id"].values)
 
-# Evaluate k1 and k4 scores for each model
-results = {}
+        for k in range(1, 26):
+            if any(retrieved_images[i] in correct_matches for i in range(k)):
+                results[model][f"k{k}"] += 1
+
+    # Convert counts to recall values
+    for k in range(1, 26):
+        results[model][f"k{k}"] /= total_queries
+
+# Plot recall@n
+plt.figure(figsize=(10, 6))
 for model in models:
-    k1_score = 0
-    k4_score = 0
-    total_queries = len(filtered_random_data)
+    recall_values = [results[model][f"k{k}"] for k in range(1, 26)]
+    plt.plot(range(1, 26), recall_values, marker='o', label=model)
 
-    for img_id, entry in filtered_random_data.items():
-        query_vector = entry["feature_vectors"][model]
-        indices, _ = hnsw_indices[model].knn_query(query_vector, k=4)
-        retrieved_images = [image_ids[i] for i in indices[0]]
-        correct_matches = entry["nearest_mapped_images"]
-
-        if retrieved_images[0] in correct_matches:
-            k1_score += 1
-            k4_score += 1
-        else:
-            for retrieved in retrieved_images:
-                if retrieved in correct_matches:
-                    k4_score += 1
-                    break
-
-    k1_accuracy = k1_score / total_queries
-    k4_accuracy = k4_score / total_queries
-    results[model] = {"k1": k1_accuracy, "k4": k4_accuracy}
-    
-    print(f"{model} - k1 accuracy: {k1_accuracy:.4f}, k4 accuracy: {k4_accuracy:.4f}")
-
-# Plot results
-plt.figure(figsize=(8, 5))
-k1_scores = [results[model]["k1"] for model in models]
-k4_scores = [results[model]["k4"] for model in models]
-
-plt.bar(models, k1_scores, label="k1 Accuracy", alpha=0.6)
-plt.bar(models, k4_scores, label="k4 Accuracy", alpha=0.6, bottom=k1_scores)
-plt.ylabel("Accuracy")
-plt.title(f"VPR Evaluation Results Across {test_envs} Envs")
+plt.xlabel("k")
+plt.ylabel("Recall@k")
+plt.title("Recall@k for Different Models")
 plt.legend()
+plt.grid(True)
 plt.show()
