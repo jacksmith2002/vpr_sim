@@ -33,6 +33,7 @@ query_image_id = os.path.splitext(query_image_file)[0]
 for model in models:
     # Retrieve query vector
     query_vector = image_features[model][query_image_id]
+    print(query_vector).shape()
 
     # Compute similarity with all other images
     for img_file in test_image_files:
